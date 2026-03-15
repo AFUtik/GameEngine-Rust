@@ -192,7 +192,7 @@ impl State {
         });
         
         // Image loading //
-        let img = image::open("src/green.png").unwrap().flipv();
+        let img = image::open("resources/images/green.png").unwrap().flipv();
         let rgba = img.to_rgba8(); 
         let dimensions = img.dimensions();
         let size = wgpu::Extent3d {
@@ -279,7 +279,7 @@ impl State {
             wgpu::ShaderModuleDescriptor {
                 label: Some("shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("shader.wgsl").into()
+                    include_str!("../resources/shaders/shader.wgsl").into()
                 ),
             }
         );
@@ -412,7 +412,6 @@ impl State {
         }
 
         self.queue.submit(Some(encoder.finish()));
-
         frame.present();
     }
 
