@@ -1,6 +1,6 @@
 use image::RgbaImage;
 
-use crate::model;
+use crate::model::{self, Mesh, Vertex};
 use std:: {collections::HashMap, marker::PhantomData};
 use wgpu::{Texture, util::DeviceExt};
 
@@ -100,6 +100,8 @@ impl MaterialGPU {
 pub struct MeshGPU {
     vertex_buffer: Option<wgpu::Buffer>,
     index_buffer:  Option<wgpu::Buffer>,
+    vertex_count: u32,
+    index_count:  u32
 }
 
 impl MeshGPU {
@@ -122,11 +124,14 @@ impl MeshGPU {
 
         Self {
             vertex_buffer,
-            index_buffer
+            index_buffer,
+            vertex_count: mesh.vertices.len() as u32,
+            index_count:  mesh.indices.len() as u32
         }
     }
 }
 
+/* 
 struct Handle<T> {
     handle: u32,
     _phantom: std::marker::PhantomData<T>,
@@ -178,17 +183,21 @@ impl<'a> RenderScene<'a> {
         RenderObject { mesh: mesh_handle, material: material_handle}
     }
 }
+*/
 
-pub struct RenderSystem<'a> {
-    device: &'a wgpu::Device,
-    queue:  &'a wgpu::Queue,
-
-    pipeline: wgpu::RenderPipeline,
-    scene: RenderScene<'a>
+pub trait RenderSystem {
+    fn render<'a>(&self, render_pass: &'a mut wgpu::RenderPass);
 }
 
-impl<'a> RenderSystem<'a> {
-    pub fn new(device: &'a wgpu::Device, queue:  &'a wgpu::Queue, config: &wgpu::SurfaceConfiguration) -> Self {
+pub struct BasicRenderSystem {
+    pipeline: wgpu::RenderPipeline,
+
+    mesh: MeshGPU,
+    material: MaterialGPU
+}
+
+impl BasicRenderSystem {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, config: &wgpu::SurfaceConfiguration) -> Self {
         let shader = device.create_shader_module(
             wgpu::ShaderModuleDescriptor {
                 label: Some("shader"),
@@ -272,15 +281,39 @@ impl<'a> RenderSystem<'a> {
                 cache: None,
             });
 
+        let mesh = Mesh {
+            vertices: vec![
+                Vertex { position: [-0.5, -0.5, 0.0], uv: [0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
+                Vertex { position: [ 0.5, -0.5, 0.0], uv: [1.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
+                Vertex { position: [ 0.5,  0.5, 0.0], uv: [1.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+                Vertex { position: [-0.5,  0.5, 0.0], uv: [0.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+            ],
+            indices: vec![0, 1, 2, 2, 3, 0],
+        };
+
+        let img = image::open("resources/images/green.png").unwrap().fliph();
+        let rgba = img.to_rgba8(); 
+
         Self {
-            device,
-            queue,
             pipeline,
-            scene: RenderScene::new(device, queue, texture_bind_group_layout)
+            mesh: MeshGPU::new(&device, &mesh),
+            material: MaterialGPU::new(&device, &texture_bind_group_layout, TextureGPU::new(&device, &queue, &rgba))
         }
     }
+}
 
-    pub fn pass(&self, render_pass: &mut wgpu::RenderPass) {
-        render_pass.set_pipeline(&self.pipeline);
+impl RenderSystem for BasicRenderSystem {
+    fn render(&self, pass: &mut wgpu::RenderPass) {
+        pass.set_pipeline(&self.pipeline);
+
+        if let Some(vb) = &self.mesh.vertex_buffer {
+            pass.set_vertex_buffer(0, vb.slice(..));
+        }
+        if let Some(ib) = &self.mesh.index_buffer {
+            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+        }
+
+        pass.set_bind_group(0, &self.material.texture_bind_group, &[]);
+        pass.draw_indexed(0..self.mesh.index_count as u32, 0, 0..1);
     }
 }

@@ -7,19 +7,19 @@ use winit::{
     window::{Window, WindowAttributes},
 };
 
-use crate::render_system::{self, RenderSystem};
+use crate::render_system::RenderSystem;
 
-pub struct Renderer<'a> {
+pub struct Renderer {
     surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+    pub config: wgpu::SurfaceConfiguration,
 
-    render_system: Option<RenderSystem<'a>>
+    // Render system that have different pipeline //
+    systems: Vec<Box<dyn RenderSystem>>
 }
 
-
-impl<'a> Renderer<'a> {
+impl Renderer {
     pub async fn new(window: Arc<Window>) -> Self {
         let size = window.inner_size();
 
@@ -68,16 +68,15 @@ impl<'a> Renderer<'a> {
             device,
             queue,
             config,
-            render_system: None
+            systems: Vec::new()
         }
     }
 
-    pub fn create_render_system(&'a mut self) {
-        self.render_system = Some(RenderSystem::new(&self.device, &self.queue, &self.config));
+    pub fn create_render_system(&mut self, system: Box<dyn RenderSystem>) {
+        self.systems.push(system);
     }
 
     pub fn render(&mut self) {
-
         let frame = self.surface
             .get_current_texture()
             .unwrap();
@@ -123,8 +122,8 @@ impl<'a> Renderer<'a> {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     }
-                );
-
+                );   
+            for system in self.systems.iter() {system.render(&mut pass);}
         }
 
         self.queue.submit(Some(encoder.finish()));

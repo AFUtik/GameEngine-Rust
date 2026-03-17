@@ -12,10 +12,12 @@ use winit::{
 use wgpu::{Texture, util::DeviceExt};
 
 mod model;
+
 mod render_system;
 mod renderer;
 
-use crate::renderer::Renderer;
+
+use crate::{render_system::BasicRenderSystem, renderer::Renderer};
 
 struct App {
     window: Option<Arc<Window>>,
@@ -29,7 +31,12 @@ impl ApplicationHandler for App {
             .unwrap());
 
         self.renderer = Some(pollster::block_on(Renderer::new(window.clone())));
-        self.window = Some(window);
+        self.window   = Some(window);
+
+        if let Some(renderer) = &mut self.renderer {
+            let rsystem = Box::new(BasicRenderSystem::new(&renderer.device, &renderer.queue, &renderer.config));
+            renderer.create_render_system(rsystem);
+        }
     }
 
     fn window_event(
