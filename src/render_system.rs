@@ -1,17 +1,18 @@
 use image::RgbaImage;
+use std::rc::Rc;
 
 use crate::model::{self, Mesh, Vertex};
 use std:: {collections::HashMap, marker::PhantomData};
 use wgpu::{Texture, util::DeviceExt};
 
-struct TextureGPU {
+pub struct TextureGPU {
    image: wgpu::Texture,
    view: wgpu::TextureView,
    sampler: wgpu::Sampler,  
 }
 
 impl TextureGPU {
-    fn new(device: &wgpu::Device, queue: &wgpu::Queue, image_data: &RgbaImage) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, image_data: &RgbaImage) -> Self {
         let dimensions = image_data.dimensions();
         let size = wgpu::Extent3d {
             width: dimensions.0,
@@ -68,13 +69,13 @@ impl TextureGPU {
     }
 }
 
-struct MaterialGPU {
+pub struct MaterialGPU {
     albedo: TextureGPU,
     texture_bind_group: wgpu::BindGroup,
 }
 
 impl MaterialGPU {
-    fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, albedo: TextureGPU) -> Self {
+    pub fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, albedo: TextureGPU) -> Self {
         let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &layout,
             entries: &[
@@ -105,7 +106,7 @@ pub struct MeshGPU {
 }
 
 impl MeshGPU {
-    fn new(device: &wgpu::Device, mesh: &model::Mesh) -> Self {
+    pub fn new(device: &wgpu::Device, mesh: &model::Mesh) -> Self {
         let vertex_buffer = Some(device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Vertex Buffer"),
@@ -185,20 +186,40 @@ impl<'a> RenderScene<'a> {
 }
 */
 
+pub struct ResourceController {
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+}
+
+impl ResourceController {
+    fn create_mesh_gpu(&self, mesh: &Mesh) -> MeshGPU {
+        MeshGPU::new(&self.device, &mesh)
+    }
+
+    fn create_texture_gpu(&self, image: &RgbaImage) -> TextureGPU {
+        TextureGPU::new(&self.device, &self.queue, &image)
+    }
+
+    fn create_material_gpu(&self, layout: &wgpu::BindGroupLayout, texture: TextureGPU) -> MaterialGPU {
+        MaterialGPU::new(&self.device, &layout, texture)
+    }
+}
+
 pub trait RenderSystem {
     fn render<'a>(&self, render_pass: &'a mut wgpu::RenderPass);
 }
 
 pub struct BasicRenderSystem {
     pipeline: wgpu::RenderPipeline,
+    res_controller: Rc<ResourceController>,
 
     mesh: MeshGPU,
     material: MaterialGPU
 }
 
 impl BasicRenderSystem {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, config: &wgpu::SurfaceConfiguration) -> Self {
-        let shader = device.create_shader_module(
+    pub fn new(res_controller: &Rc<ResourceController>, config: &wgpu::SurfaceConfiguration) -> Self {
+        let shader = res_controller.device.create_shader_module(
             wgpu::ShaderModuleDescriptor {
                 label: Some("shader"),
                 source: wgpu::ShaderSource::Wgsl(
@@ -224,7 +245,7 @@ impl BasicRenderSystem {
             write_mask: wgpu::ColorWrites::ALL,
         });
 
-        let texture_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let texture_bind_group_layout = res_controller.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("texture_bind_group_layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
@@ -247,14 +268,14 @@ impl BasicRenderSystem {
         });
 
         let pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            res_controller.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("layout"),
                 bind_group_layouts: &[&texture_bind_group_layout],
                 immediate_size: 0,
             });
 
         let pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            res_controller.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
 
                 label: Some("pipeline"),
 
@@ -293,11 +314,13 @@ impl BasicRenderSystem {
 
         let img = image::open("resources/images/green.png").unwrap().fliph();
         let rgba = img.to_rgba8(); 
+        let tex_gpu = res_controller.create_texture_gpu(&rgba);
 
         Self {
             pipeline,
-            mesh: MeshGPU::new(&device, &mesh),
-            material: MaterialGPU::new(&device, &texture_bind_group_layout, TextureGPU::new(&device, &queue, &rgba))
+            res_controller: res_controller.clone(),
+            mesh: res_controller.create_mesh_gpu(&mesh),
+            material: res_controller.create_material_gpu(&texture_bind_group_layout, tex_gpu)
         }
     }
 }
@@ -312,7 +335,6 @@ impl RenderSystem for BasicRenderSystem {
         if let Some(ib) = &self.mesh.index_buffer {
             pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
         }
-
         pass.set_bind_group(0, &self.material.texture_bind_group, &[]);
         pass.draw_indexed(0..self.mesh.index_count as u32, 0, 0..1);
     }

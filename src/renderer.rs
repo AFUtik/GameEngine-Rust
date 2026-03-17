@@ -1,5 +1,7 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
+use image::RgbaImage;
 use winit::{
     application::ApplicationHandler,
     event::*,
@@ -7,12 +9,12 @@ use winit::{
     window::{Window, WindowAttributes},
 };
 
-use crate::render_system::RenderSystem;
+use crate::{model::Mesh, render_system::{ResourceController, MaterialGPU, MeshGPU, RenderSystem, TextureGPU}};
 
 pub struct Renderer {
+    pub controller: Rc<ResourceController>,
+
     surface: wgpu::Surface<'static>,
-    pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
     pub config: wgpu::SurfaceConfiguration,
 
     // Render system that have different pipeline //
@@ -64,9 +66,8 @@ impl Renderer {
         surface.configure(&device, &config);
 
         Self {
+            controller: Rc::new(ResourceController {device, queue}),
             surface,
-            device,
-            queue,
             config,
             systems: Vec::new()
         }
@@ -85,7 +86,7 @@ impl Renderer {
             .create_view(&Default::default());
 
         let mut encoder =
-            self.device.create_command_encoder(
+            self.controller.device.create_command_encoder(
                 &wgpu::CommandEncoderDescriptor::default()
             );
 
@@ -126,13 +127,13 @@ impl Renderer {
             for system in self.systems.iter() {system.render(&mut pass);}
         }
 
-        self.queue.submit(Some(encoder.finish()));
+        self.controller.queue.submit(Some(encoder.finish()));
         frame.present();
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
         self.config.width = width;
         self.config.height = height;
-        self.surface.configure(&self.device, &self.config);
+        self.surface.configure(&self.controller.device, &self.config);
     }
 }

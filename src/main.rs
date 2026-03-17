@@ -34,7 +34,7 @@ impl ApplicationHandler for App {
         self.window   = Some(window);
 
         if let Some(renderer) = &mut self.renderer {
-            let rsystem = Box::new(BasicRenderSystem::new(&renderer.device, &renderer.queue, &renderer.config));
+            let rsystem = Box::new(BasicRenderSystem::new(&renderer.controller, &renderer.config));
             renderer.create_render_system(rsystem);
         }
     }
