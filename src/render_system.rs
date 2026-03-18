@@ -1,3 +1,4 @@
+use glam::{Mat4, Vec3, Vec2};
 use image::RgbaImage;
 use std::rc::Rc;
 
@@ -185,7 +186,6 @@ impl<'a> RenderScene<'a> {
     }
 }
 */
-
 pub struct ResourceController {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -212,6 +212,14 @@ pub trait RenderSystem {
 pub struct BasicRenderSystem {
     pipeline: wgpu::RenderPipeline,
     res_controller: Rc<ResourceController>,
+
+    camera_buffer: wgpu::Buffer,
+    camera_bind_group_layout: wgpu::BindGroupLayout,
+    camera_bind_group: wgpu::BindGroup,
+
+    model_buffer: wgpu::Buffer,
+    model_bind_group_layout: wgpu::BindGroupLayout,
+    model_bind_group: wgpu::BindGroup,
 
     mesh: MeshGPU,
     material: MaterialGPU
@@ -267,10 +275,86 @@ impl BasicRenderSystem {
             ],
         });
 
+        let fovy = 45.0f32.to_radians();
+        let aspect = 1920.0 / 1080.0;    
+        let near = 0.1;                  
+        let far = 100.0;                 
+
+        let proj = Mat4::perspective_rh(fovy, aspect, near, far);
+
+        let eye = Vec3::new(0.0, 2.0, 5.0);
+        let target = Vec3::new(0.0, 0.0, 0.0);
+        let up = Vec3::Y;
+
+        let view = Mat4::look_at_rh(eye, target, up);
+        let projview = proj * view;
+        
+        // Camera Uniform //
+        let camera_buffer = res_controller.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Camera Buffer"),
+            contents: bytemuck::cast_slice(&[projview]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        
+        let camera_bind_group_layout = res_controller.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+            label: Some("camera layout"),
+        });
+
+        let camera_bind_group = res_controller.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &camera_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
+            label: Some("camera bind group"),
+        });
+
+        // Model Uniform //
+        let model_buffer = 
+            res_controller.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Model Buffer"),
+            contents: bytemuck::cast_slice(&[glam::Mat4::IDENTITY]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let model_bind_group_layout = 
+            res_controller.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+            label: Some("model layout"),
+        });
+
+        let model_bind_group = res_controller.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &camera_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
+            label: Some("model bind group"),
+        });
+
         let pipeline_layout =
             res_controller.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("layout"),
-                bind_group_layouts: &[&texture_bind_group_layout],
+                bind_group_layouts: &[&camera_bind_group_layout, &model_bind_group_layout, &texture_bind_group_layout],
                 immediate_size: 0,
             });
 
@@ -319,6 +403,15 @@ impl BasicRenderSystem {
         Self {
             pipeline,
             res_controller: res_controller.clone(),
+
+            camera_buffer,
+            camera_bind_group_layout,
+            camera_bind_group,
+
+            model_buffer,
+            model_bind_group_layout,
+            model_bind_group,
+
             mesh: res_controller.create_mesh_gpu(&mesh),
             material: res_controller.create_material_gpu(&texture_bind_group_layout, tex_gpu)
         }
@@ -328,6 +421,8 @@ impl BasicRenderSystem {
 impl RenderSystem for BasicRenderSystem {
     fn render(&self, pass: &mut wgpu::RenderPass) {
         pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(1, &self.model_bind_group, &[]);
 
         if let Some(vb) = &self.mesh.vertex_buffer {
             pass.set_vertex_buffer(0, vb.slice(..));
@@ -335,7 +430,7 @@ impl RenderSystem for BasicRenderSystem {
         if let Some(ib) = &self.mesh.index_buffer {
             pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
         }
-        pass.set_bind_group(0, &self.material.texture_bind_group, &[]);
+        pass.set_bind_group(2, &self.material.texture_bind_group, &[]);
         pass.draw_indexed(0..self.mesh.index_count as u32, 0, 0..1);
     }
 }
