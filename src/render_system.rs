@@ -1,6 +1,8 @@
 use glam::{Mat4, Vec3, Vec2};
 use image::RgbaImage;
+
 use std::rc::Rc;
+use std::cell::RefCell;
 
 use crate::model::{self, Mesh, Vertex};
 use std:: {collections::HashMap, marker::PhantomData};
@@ -132,60 +134,6 @@ impl MeshGPU {
         }
     }
 }
-
-/* 
-struct Handle<T> {
-    handle: u32,
-    _phantom: std::marker::PhantomData<T>,
-}
-struct RenderObject {
-    mesh: Handle<MeshGPU>,
-    material: Handle<MaterialGPU>,
-}
-
-pub struct RenderScene<'a> {
-    device: &'a wgpu::Device,
-    queue:  &'a wgpu::Queue,
-    texture_bind_group_layout: wgpu::BindGroupLayout,
-    
-    meshes:    Vec<MeshGPU>,
-    materials: Vec<MaterialGPU>,
-
-    renderables: Vec<Handle::<RenderObject>>
-
-    //meshConvert: HashMap<*const model::Mesh, MeshGPU>
-}
-
-impl<'a> RenderScene<'a> {
-    fn new(device: &'a wgpu::Device, queue:  &'a wgpu::Queue, texture_bind_group_layout: wgpu::BindGroupLayout) -> Self {
-        Self {
-            device,
-            queue,
-            texture_bind_group_layout,
-            meshes:      Vec::new(),
-            materials:   Vec::new(),
-            renderables: Vec::new()
-        }
-    }
-
-    fn create_render_object(&mut self, mesh: &model::Mesh, image: &RgbaImage) -> RenderObject {
-        let mesh_gpu = MeshGPU::new(&self.device, &mesh);
-
-        let texture_gpu  = TextureGPU::new(&self.device, &self.queue, &image);
-        let material_gpu = MaterialGPU::new(&self.device, &self.texture_bind_group_layout, texture_gpu);
-
-        let obj_handle      = Handle::<RenderObject> {handle: self.renderables.len() as u32, _phantom: PhantomData};
-        let mesh_handle     = Handle::<MeshGPU> {handle: self.meshes.len() as u32, _phantom: PhantomData};
-        let material_handle = Handle::<MaterialGPU> {handle: self.materials.len() as u32, _phantom: PhantomData};
-
-        self.renderables.push(obj_handle);
-        self.meshes.push(mesh_gpu);
-        self.materials.push(material_gpu);
-
-        RenderObject { mesh: mesh_handle, material: material_handle}
-    }
-}
-*/
 pub struct ResourceController {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -205,8 +153,212 @@ impl ResourceController {
     }
 }
 
+// Render Scene //
+
+pub struct Handle<T> {
+    pub handle: u32,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> Copy for Handle<T> {}
+
+impl<T> Clone for Handle<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+pub enum RenderLayer {
+    Opaque, 
+    Transparent,
+    Solid
+}
+
+pub struct DrawMesh {
+    mesh: MeshGPU,
+    ref_count: u32,
+}
+
+pub struct DrawMaterial {
+    material: MaterialGPU,
+    ref_count: u32,
+}
+
+pub struct RenderObject {
+    mesh: Handle<MeshGPU>,
+    material: Handle<MaterialGPU>,
+    layer: RenderLayer,
+    visible: bool
+}
+
+pub struct DrawCommand {
+    object_id: Handle<RenderObject>,
+}
+
+pub struct DrawCommandScissor {
+    object_id: Handle<RenderObject>,
+    scissor_rect: [u32; 4]
+}
+
+pub struct RenderScene {
+    controller: Rc<ResourceController>,
+    texture_bind_group_layout: Rc<wgpu::BindGroupLayout>,
+    
+    meshes:    Vec<DrawMesh>,
+    materials: Vec<DrawMaterial>,
+    renderables: Vec<RenderObject>, 
+}
+
+impl RenderScene {
+    fn new(controller: &Rc<ResourceController>, texture_bind_group_layout: &Rc<wgpu::BindGroupLayout>) -> Self {
+        Self {
+            controller: controller.clone(),
+            texture_bind_group_layout: texture_bind_group_layout.clone(),
+            meshes:      Vec::new(),
+            materials:   Vec::new(),
+            renderables: Vec::new()
+        }
+    }
+
+    //fn create_render_object(&mut self, mesh: &model::Mesh, image: &RgbaImage) -> RenderObject {
+    //    let mesh_gpu = MeshGPU::new(&self.device, &mesh);
+
+    //    let texture_gpu  = TextureGPU::new(&self.device, &self.queue, &image);
+    //    let material_gpu = MaterialGPU::new(&self.device, &self.texture_bind_group_layout, texture_gpu);
+
+    //    let obj_handle      = Handle::<RenderObject> {handle: self.renderables.len() as u32, _phantom: PhantomData};
+    //    let mesh_handle     = Handle::<MeshGPU> {handle: self.meshes.len() as u32, _phantom: PhantomData};
+    //    let material_handle = Handle::<MaterialGPU> {handle: self.materials.len() as u32, _phantom: PhantomData};
+
+    //    self.renderables.push(obj_handle);
+    //    self.meshes.push(mesh_gpu);
+    //    self.materials.push(material_gpu);
+
+    //    RenderObject { mesh: mesh_handle, material: material_handle}
+    //}
+
+    pub fn register_render_object(
+        &mut self,
+        mesh_handle: Handle<MeshGPU>,
+        material_handle: Handle<MaterialGPU>, 
+        render_layer: RenderLayer) -> Handle<RenderObject> 
+    {
+        let render_handle = Handle::<RenderObject> {handle: self.renderables.len() as u32, _phantom: PhantomData};
+        self.renderables.push(RenderObject {mesh: mesh_handle, material: material_handle, layer: render_layer, visible: true});
+        return render_handle;
+    }
+
+    pub fn create_mesh(&mut self, mesh: &Mesh) -> Handle<MeshGPU> {
+        let mesh_gpu = self.controller.create_mesh_gpu(mesh);
+        let mesh_handle     = Handle::<MeshGPU> {handle: self.meshes.len() as u32, _phantom: PhantomData};
+
+        self.meshes.push(DrawMesh { mesh: mesh_gpu, ref_count: 1 });
+
+        mesh_handle
+    }
+
+    pub fn create_material(&mut self, albedo: &RgbaImage) -> Handle<MaterialGPU> {
+        let tex_gpu  = self.controller.create_texture_gpu(albedo);
+        let mate_gpu = self.controller.create_material_gpu(&self.texture_bind_group_layout, tex_gpu);
+
+        let mate_handle     = Handle::<MaterialGPU> {handle: self.materials.len() as u32, _phantom: PhantomData};
+
+        self.materials.push(DrawMaterial { material: mate_gpu, ref_count: 1 });
+
+        mate_handle
+    }
+
+    pub fn ref_cnt_mesh_add(&mut self, handle: Handle<MeshGPU>) {
+        self.meshes[handle.handle as usize].ref_count += 1;
+    }
+
+    pub fn ref_cnt_material_add(&mut self, handle: Handle<MaterialGPU>) {
+        self.materials[handle.handle as usize].ref_count += 1;
+    }
+
+    pub fn delete_render_object(&mut self, handle: Handle<RenderObject>) {
+        let mesh_handle     = self.renderables[handle.handle as usize].mesh;
+        let material_handle = self.renderables[handle.handle as usize].material;
+
+        self.delete_mesh(mesh_handle);
+        self.delete_material(material_handle);
+    }
+
+    pub fn delete_mesh(&mut self, handle: Handle<MeshGPU>) {
+        let mesh = &mut self.meshes[handle.handle as usize];
+        mesh.ref_count-=1;
+
+        if mesh.ref_count == 0 {
+            self.meshes.remove(handle.handle as usize);
+        }
+    }
+
+    pub fn delete_material(&mut self, handle: Handle<MaterialGPU>) {
+        let mat = &mut self.materials[handle.handle as usize];
+        mat.ref_count-=1;
+
+        if mat.ref_count == 0 {
+            self.materials.remove(handle.handle as usize);
+        }
+    }
+}
+
+pub trait ObjectRenderer {
+    fn init(&mut self, scene: &Rc<RefCell<RenderScene>>);
+
+    fn make_draw_commands(&self, commands: &mut Vec<DrawCommand>);
+
+    fn make_draw_commands_opaque(&self, commands: &mut Vec<DrawCommand>) {}
+
+    fn make_draw_commands_transparent(&self, commands: &mut Vec<DrawCommand>) {}
+
+    fn make_draw_commands_scissor(&self, commands: &mut Vec<DrawCommandScissor>) {}
+}
+
+pub struct BaseObjectRenderer {
+    render_scene: Option<Rc<RefCell<RenderScene>>>,
+    render_obj: Handle<RenderObject>
+}
+
+impl BaseObjectRenderer {
+    pub fn new() -> Self {
+        Self {
+            render_scene: None,
+            render_obj:   Handle::<RenderObject> { handle: u32::MAX, _phantom: PhantomData }
+        }
+    }
+}
+
+impl ObjectRenderer for BaseObjectRenderer {
+    fn init(&mut self, scene: &Rc<RefCell<RenderScene>>) {
+        self.render_scene = Some(scene.clone());
+        
+        let mesh = Mesh {
+            vertices: vec![
+                Vertex { position: [-0.5, -0.5, 0.0], uv: [0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
+                Vertex { position: [ 0.5, -0.5, 0.0], uv: [1.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
+                Vertex { position: [ 0.5,  0.5, 0.0], uv: [1.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+                Vertex { position: [-0.5,  0.5, 0.0], uv: [0.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+            ],
+            indices: vec![0, 1, 2, 2, 3, 0],
+        };
+
+        let img = image::open("resources/images/green.png").unwrap().fliph();
+        let rgba = img.to_rgba8();
+    
+        let mut scene_mut = scene.borrow_mut();
+        let mesh_h = scene_mut.create_mesh(&mesh);
+        let mat_h  = scene_mut.create_material(&rgba);
+        self.render_obj = scene_mut.register_render_object(mesh_h, mat_h, RenderLayer::Solid);
+    }
+
+    fn make_draw_commands(&self, commands: &mut Vec<DrawCommand>) {
+        commands.push(DrawCommand { object_id: self.render_obj });
+    }
+}
+
 pub trait RenderSystem {
-    fn render<'a>(&self, render_pass: &'a mut wgpu::RenderPass);
+    fn render(&mut self, render_pass: &mut wgpu::RenderPass);
 }
 
 pub struct BasicRenderSystem {
@@ -221,8 +373,12 @@ pub struct BasicRenderSystem {
     model_bind_group_layout: wgpu::BindGroupLayout,
     model_bind_group: wgpu::BindGroup,
 
-    mesh: MeshGPU,
-    material: MaterialGPU
+    texture_bind_group_layout: Rc<wgpu::BindGroupLayout>,
+
+    render_scene: Rc<RefCell<RenderScene>>,
+    draw_commands: Vec<DrawCommand>,
+    draw_commands_scissor: Vec<DrawCommandScissor>,
+    object_renderers: Vec<Box<dyn ObjectRenderer>>
 }
 
 impl BasicRenderSystem {
@@ -253,7 +409,7 @@ impl BasicRenderSystem {
             write_mask: wgpu::ColorWrites::ALL,
         });
 
-        let texture_bind_group_layout = res_controller.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let texture_bind_group_layout = Rc::new(res_controller.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("texture_bind_group_layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
@@ -273,26 +429,26 @@ impl BasicRenderSystem {
                     count: None,
                 },
             ],
-        });
+        }));
 
-        let fovy = 45.0f32.to_radians();
-        let aspect = 1920.0 / 1080.0;    
-        let near = 0.1;                  
-        let far = 100.0;                 
+        //let fovy = 45.0f32.to_radians();
+        //let aspect = 1920.0 / 1080.0;    
+        //let near = 0.1;                  
+        //let far = 100.0;  
 
-        let proj = Mat4::perspective_rh(fovy, aspect, near, far);
+        //let proj = Mat4::perspective_rh(fovy, aspect, near, far);
+        //
+        //let eye = Vec3::new(0.0, 2.0, 5.0);
+        //let target = Vec3::new(0.0, 0.0, 0.0);
+        //let up = Vec3::Y;
 
-        let eye = Vec3::new(0.0, 2.0, 5.0);
-        let target = Vec3::new(0.0, 0.0, 0.0);
-        let up = Vec3::Y;
-
-        let view = Mat4::look_at_rh(eye, target, up);
-        let projview = proj * view;
+        //let view = Mat4::look_at_rh(eye, target, up);
+        //let projview = proj * view;
         
         // Camera Uniform //
         let camera_buffer = res_controller.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera Buffer"),
-            contents: bytemuck::cast_slice(&[projview]),
+            contents: bytemuck::cast_slice(&[Mat4::IDENTITY]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         
@@ -386,20 +542,6 @@ impl BasicRenderSystem {
                 cache: None,
             });
 
-        let mesh = Mesh {
-            vertices: vec![
-                Vertex { position: [-0.5, -0.5, 0.0], uv: [0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
-                Vertex { position: [ 0.5, -0.5, 0.0], uv: [1.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
-                Vertex { position: [ 0.5,  0.5, 0.0], uv: [1.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
-                Vertex { position: [-0.5,  0.5, 0.0], uv: [0.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
-            ],
-            indices: vec![0, 1, 2, 2, 3, 0],
-        };
-
-        let img = image::open("resources/images/green.png").unwrap().fliph();
-        let rgba = img.to_rgba8(); 
-        let tex_gpu = res_controller.create_texture_gpu(&rgba);
-
         Self {
             pipeline,
             res_controller: res_controller.clone(),
@@ -412,25 +554,47 @@ impl BasicRenderSystem {
             model_bind_group_layout,
             model_bind_group,
 
-            mesh: res_controller.create_mesh_gpu(&mesh),
-            material: res_controller.create_material_gpu(&texture_bind_group_layout, tex_gpu)
+            texture_bind_group_layout: texture_bind_group_layout.clone(),
+
+            render_scene: Rc::new(RefCell::new(RenderScene::new(&res_controller, &texture_bind_group_layout))),
+            draw_commands: Vec::new(),
+            draw_commands_scissor: Vec::new(),
+            object_renderers: Vec::new()
         }
+    }
+
+    pub fn register_object_renderer(&mut self, mut renderer: Box<dyn ObjectRenderer>) {
+        renderer.init(&self.render_scene);
+        self.object_renderers.push(renderer);
     }
 }
 
 impl RenderSystem for BasicRenderSystem {
-    fn render(&self, pass: &mut wgpu::RenderPass) {
+    fn render(&mut self, pass: &mut wgpu::RenderPass) {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        pass.set_bind_group(1, &self.model_bind_group, &[]);
+        pass.set_bind_group(1, &self.model_bind_group,  &[]);
+        let scene = self.render_scene.borrow();
 
-        if let Some(vb) = &self.mesh.vertex_buffer {
-            pass.set_vertex_buffer(0, vb.slice(..));
+        for renderer in self.object_renderers.iter() {
+            renderer.make_draw_commands(&mut self.draw_commands);
         }
-        if let Some(ib) = &self.mesh.index_buffer {
-            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+
+        for draw in self.draw_commands.iter() {
+            let obj = &scene.renderables[draw.object_id.handle as usize];
+            let mesh = &scene.meshes[obj.mesh.handle as usize].mesh;
+            let material = &scene.materials[obj.material.handle as usize].material;
+
+            if let Some(vb) = &mesh.vertex_buffer {
+                pass.set_vertex_buffer(0, vb.slice(..));
+            }
+            if let Some(ib) = &mesh.index_buffer {
+                pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            }
+            pass.set_bind_group(2, &material.texture_bind_group, &[]);
+            pass.draw_indexed(0..mesh.index_count as u32, 0, 0..1);
         }
-        pass.set_bind_group(2, &self.material.texture_bind_group, &[]);
-        pass.draw_indexed(0..self.mesh.index_count as u32, 0, 0..1);
+        
+        self.draw_commands.clear();
     }
 }

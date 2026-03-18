@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::{cell::RefCell, sync::Arc};
+use std::rc::Rc;
 
 use image::GenericImageView;
 
@@ -17,7 +18,8 @@ mod render_system;
 mod renderer;
 
 
-use crate::{render_system::BasicRenderSystem, renderer::Renderer};
+use crate::render_system::BaseObjectRenderer;
+use crate::{render_system::{BasicRenderSystem, RenderObject}, renderer::Renderer};
 
 struct App {
     window: Option<Arc<Window>>,
@@ -34,7 +36,10 @@ impl ApplicationHandler for App {
         self.window   = Some(window);
 
         if let Some(renderer) = &mut self.renderer {
-            let rsystem = Box::new(BasicRenderSystem::new(&renderer.controller, &renderer.config));
+            let mut rsystem  = Box::new(BasicRenderSystem::new(&renderer.controller, &renderer.config));
+            let obj_renderer = Box::new(BaseObjectRenderer::new());
+            rsystem.register_object_renderer(obj_renderer);
+
             renderer.create_render_system(rsystem);
         }
     }

@@ -124,7 +124,7 @@ impl Renderer {
                         multiview_mask: None,
                     }
                 );   
-            for system in self.systems.iter() {system.render(&mut pass);}
+            for system in self.systems.iter_mut() {system.render(&mut pass);}
         }
 
         self.controller.queue.submit(Some(encoder.finish()));
