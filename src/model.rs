@@ -1,3 +1,4 @@
+use glam::{self, Vec3};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -36,4 +37,24 @@ impl Vertex {
 pub struct Mesh {
     pub vertices: Vec<Vertex>,
     pub indices:  Vec<u32>
+}
+
+pub struct Transform {
+    pub pos: glam::DVec3,
+    pub rot: glam::DQuat,
+    pub scl: glam::DVec3,
+}
+
+impl Transform {
+    pub fn new() -> Self {
+        Self {
+            pos:   glam::DVec3::ZERO,
+            rot:   glam::DQuat::IDENTITY,
+            scl:   glam::DVec3::ONE,
+        }
+    }
+
+    pub fn translate(&mut self, delta: &glam::DVec3) {
+        self.pos += *delta;
+    }
 }

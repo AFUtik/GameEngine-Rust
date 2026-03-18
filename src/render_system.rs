@@ -4,7 +4,7 @@ use image::RgbaImage;
 use std::rc::Rc;
 use std::cell::RefCell;
 
-use crate::model::{self, Mesh, Vertex};
+use crate::model::{self, Mesh, Vertex, Transform};
 use std:: {collections::HashMap, marker::PhantomData};
 use wgpu::{Texture, util::DeviceExt};
 
@@ -185,6 +185,7 @@ pub struct DrawMaterial {
 }
 
 pub struct RenderObject {
+    transform: glam::Mat4,
     mesh: Handle<MeshGPU>,
     material: Handle<MaterialGPU>,
     layer: RenderLayer,
@@ -244,8 +245,15 @@ impl RenderScene {
         render_layer: RenderLayer) -> Handle<RenderObject> 
     {
         let render_handle = Handle::<RenderObject> {handle: self.renderables.len() as u32, _phantom: PhantomData};
-        self.renderables.push(RenderObject {mesh: mesh_handle, material: material_handle, layer: render_layer, visible: true});
+        self.renderables.push(RenderObject {transform: glam::Mat4::IDENTITY, mesh: mesh_handle, material: material_handle, layer: render_layer, visible: true});
         return render_handle;
+    }
+
+    pub fn transform_render_object(&mut self, transform: &Transform, object_id: Handle<RenderObject>) {
+        let object = &mut self.renderables[object_id.handle as usize];
+        object.transform =  glam::Mat4::from_translation(transform.pos.as_vec3())
+                          * glam::Mat4::from_quat(transform.rot.as_quat())
+                          * glam::Mat4::from_scale(transform.scl.as_vec3())
     }
 
     pub fn create_mesh(&mut self, mesh: &Mesh) -> Handle<MeshGPU> {
@@ -303,6 +311,20 @@ impl RenderScene {
     }
 }
 
+pub struct MeshObject {
+    transform: Rc<RefCell<Transform>>,
+    render_id: Handle<RenderObject>,
+}
+
+impl MeshObject {
+    pub fn new() -> Self {
+        Self {
+            transform: Rc::new(RefCell::new(Transform::new())),
+            render_id: Handle::<RenderObject> { handle: u32::MAX, _phantom: PhantomData }
+        }
+    }
+}
+
 pub trait ObjectRenderer {
     fn init(&mut self, scene: &Rc<RefCell<RenderScene>>);
 
@@ -317,14 +339,14 @@ pub trait ObjectRenderer {
 
 pub struct BaseObjectRenderer {
     render_scene: Option<Rc<RefCell<RenderScene>>>,
-    render_obj: Handle<RenderObject>
+    obj: MeshObject,
 }
 
 impl BaseObjectRenderer {
     pub fn new() -> Self {
         Self {
             render_scene: None,
-            render_obj:   Handle::<RenderObject> { handle: u32::MAX, _phantom: PhantomData }
+            obj: MeshObject::new()
         }
     }
 }
@@ -349,11 +371,17 @@ impl ObjectRenderer for BaseObjectRenderer {
         let mut scene_mut = scene.borrow_mut();
         let mesh_h = scene_mut.create_mesh(&mesh);
         let mat_h  = scene_mut.create_material(&rgba);
-        self.render_obj = scene_mut.register_render_object(mesh_h, mat_h, RenderLayer::Solid);
+        self.obj.render_id = scene_mut.register_render_object(mesh_h, mat_h, RenderLayer::Solid);
     }
 
     fn make_draw_commands(&self, commands: &mut Vec<DrawCommand>) {
-        commands.push(DrawCommand { object_id: self.render_obj });
+        if let Some(scene) = &self.render_scene {
+
+            let transform = self.obj.transform.borrow();
+
+            scene.borrow_mut().transform_render_object(&transform, self.obj.render_id);
+            commands.push(DrawCommand { object_id: self.obj.render_id });
+        }
     }
 }
 
@@ -431,24 +459,24 @@ impl BasicRenderSystem {
             ],
         }));
 
-        //let fovy = 45.0f32.to_radians();
-        //let aspect = 1920.0 / 1080.0;    
-        //let near = 0.1;                  
-        //let far = 100.0;  
+        let fovy = 45.0f32.to_radians();
+        let aspect = 1920.0 / 1080.0;    
+        let near = 0.1;                  
+        let far = 100.0;  
 
-        //let proj = Mat4::perspective_rh(fovy, aspect, near, far);
-        //
-        //let eye = Vec3::new(0.0, 2.0, 5.0);
-        //let target = Vec3::new(0.0, 0.0, 0.0);
-        //let up = Vec3::Y;
+        let proj = Mat4::perspective_rh(fovy, aspect, near, far);
+        
+        let eye = Vec3::new(0.0, 2.0, 4.0);
+        let target = Vec3::new(0.0, 0.0, 0.0);
+        let up = Vec3::Y;
 
-        //let view = Mat4::look_at_rh(eye, target, up);
-        //let projview = proj * view;
+        let view = Mat4::look_at_rh(eye, target, up);
+        let projview = proj * view;
         
         // Camera Uniform //
         let camera_buffer = res_controller.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera Buffer"),
-            contents: bytemuck::cast_slice(&[Mat4::IDENTITY]),
+            contents: bytemuck::cast_slice(&[projview]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         
@@ -476,10 +504,11 @@ impl BasicRenderSystem {
         });
 
         // Model Uniform //
+        let model_matrix: [f32; 16] = Mat4::IDENTITY.to_cols_array();
         let model_buffer = 
             res_controller.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Model Buffer"),
-            contents: bytemuck::cast_slice(&[glam::Mat4::IDENTITY]),
+            contents: bytemuck::cast_slice(&model_matrix),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -499,10 +528,10 @@ impl BasicRenderSystem {
         });
 
         let model_bind_group = res_controller.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &camera_bind_group_layout,
+            layout: &model_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: camera_buffer.as_entire_binding(),
+                resource: model_buffer.as_entire_binding(),
             }],
             label: Some("model bind group"),
         });
@@ -574,17 +603,18 @@ impl RenderSystem for BasicRenderSystem {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
         pass.set_bind_group(1, &self.model_bind_group,  &[]);
-        let scene = self.render_scene.borrow();
-
+        
         for renderer in self.object_renderers.iter() {
             renderer.make_draw_commands(&mut self.draw_commands);
         }
 
+        let scene = self.render_scene.borrow();
         for draw in self.draw_commands.iter() {
             let obj = &scene.renderables[draw.object_id.handle as usize];
             let mesh = &scene.meshes[obj.mesh.handle as usize].mesh;
             let material = &scene.materials[obj.material.handle as usize].material;
 
+            self.res_controller.queue.write_buffer(&self.model_buffer, 0, bytemuck::cast_slice(&obj.transform.to_cols_array()));
             if let Some(vb) = &mesh.vertex_buffer {
                 pass.set_vertex_buffer(0, vb.slice(..));
             }
