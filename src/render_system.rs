@@ -1,392 +1,22 @@
 use glam::{Mat4, Vec3, Vec2};
 use image::RgbaImage;
-
-use std::rc::Rc;
-use std::cell::RefCell;
-
-use crate::model::{self, Mesh, Vertex, Transform};
 use std:: {collections::HashMap, marker::PhantomData};
 use wgpu::{Texture, util::DeviceExt};
 
-pub struct TextureGPU {
-   image: wgpu::Texture,
-   view: wgpu::TextureView,
-   sampler: wgpu::Sampler,  
-}
-
-impl TextureGPU {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, image_data: &RgbaImage) -> Self {
-        let dimensions = image_data.dimensions();
-        let size = wgpu::Extent3d {
-            width: dimensions.0,
-            height: dimensions.1,
-            depth_or_array_layers: 1,
-        };
-
-        let image = device.create_texture(
-            &wgpu::TextureDescriptor {
-                label: Some("Diffuse Texture"),
-                size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            }
-        );
-
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &image,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &image_data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * dimensions.0),
-                rows_per_image: Some(dimensions.1),
-            },
-            size,
-        );
-
-        let view = image.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
-
-        Self {
-            image,
-            view,
-            sampler
-        }
-    }
-}
-
-pub struct MaterialGPU {
-    albedo: TextureGPU,
-    texture_bind_group: wgpu::BindGroup,
-}
-
-impl MaterialGPU {
-    pub fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, albedo: TextureGPU) -> Self {
-        let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&albedo.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&albedo.sampler),
-                },
-            ],
-            label: Some("texture_bind_group"),
-        });
-
-        Self {
-            albedo,
-            texture_bind_group
-        }
-    }
-}
-
-pub struct MeshGPU {
-    vertex_buffer: Option<wgpu::Buffer>,
-    index_buffer:  Option<wgpu::Buffer>,
-    vertex_count: u32,
-    index_count:  u32
-}
-
-impl MeshGPU {
-    pub fn new(device: &wgpu::Device, mesh: &model::Mesh) -> Self {
-        let vertex_buffer = Some(device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Vertex Buffer"),
-                contents: bytemuck::cast_slice(&mesh.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            }
-        ));
-
-        let index_buffer = Some(device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(&mesh.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            }
-        ));
-
-        Self {
-            vertex_buffer,
-            index_buffer,
-            vertex_count: mesh.vertices.len() as u32,
-            index_count:  mesh.indices.len() as u32
-        }
-    }
-}
-pub struct ResourceController {
-    pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
-}
-
-impl ResourceController {
-    fn create_mesh_gpu(&self, mesh: &Mesh) -> MeshGPU {
-        MeshGPU::new(&self.device, &mesh)
-    }
-
-    fn create_texture_gpu(&self, image: &RgbaImage) -> TextureGPU {
-        TextureGPU::new(&self.device, &self.queue, &image)
-    }
-
-    fn create_material_gpu(&self, layout: &wgpu::BindGroupLayout, texture: TextureGPU) -> MaterialGPU {
-        MaterialGPU::new(&self.device, &layout, texture)
-    }
-}
-
-// Render Scene //
-
-pub struct Handle<T> {
-    pub handle: u32,
-    _phantom: PhantomData<T>,
-}
-
-impl<T> Copy for Handle<T> {}
-
-impl<T> Clone for Handle<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-pub enum RenderLayer {
-    Opaque, 
-    Transparent,
-    Solid
-}
-
-pub struct DrawMesh {
-    mesh: MeshGPU,
-    ref_count: u32,
-}
-
-pub struct DrawMaterial {
-    material: MaterialGPU,
-    ref_count: u32,
-}
-
-pub struct RenderObject {
-    transform: glam::Mat4,
-    mesh: Handle<MeshGPU>,
-    material: Handle<MaterialGPU>,
-    layer: RenderLayer,
-    visible: bool
-}
-
-pub struct DrawCommand {
-    object_id: Handle<RenderObject>,
-}
-
-pub struct DrawCommandScissor {
-    object_id: Handle<RenderObject>,
-    scissor_rect: [u32; 4]
-}
-
-pub struct RenderScene {
-    controller: Rc<ResourceController>,
-    texture_bind_group_layout: Rc<wgpu::BindGroupLayout>,
-    
-    meshes:    Vec<DrawMesh>,
-    materials: Vec<DrawMaterial>,
-    renderables: Vec<RenderObject>, 
-}
-
-impl RenderScene {
-    fn new(controller: &Rc<ResourceController>, texture_bind_group_layout: &Rc<wgpu::BindGroupLayout>) -> Self {
-        Self {
-            controller: controller.clone(),
-            texture_bind_group_layout: texture_bind_group_layout.clone(),
-            meshes:      Vec::new(),
-            materials:   Vec::new(),
-            renderables: Vec::new()
-        }
-    }
-
-    //fn create_render_object(&mut self, mesh: &model::Mesh, image: &RgbaImage) -> RenderObject {
-    //    let mesh_gpu = MeshGPU::new(&self.device, &mesh);
-
-    //    let texture_gpu  = TextureGPU::new(&self.device, &self.queue, &image);
-    //    let material_gpu = MaterialGPU::new(&self.device, &self.texture_bind_group_layout, texture_gpu);
-
-    //    let obj_handle      = Handle::<RenderObject> {handle: self.renderables.len() as u32, _phantom: PhantomData};
-    //    let mesh_handle     = Handle::<MeshGPU> {handle: self.meshes.len() as u32, _phantom: PhantomData};
-    //    let material_handle = Handle::<MaterialGPU> {handle: self.materials.len() as u32, _phantom: PhantomData};
-
-    //    self.renderables.push(obj_handle);
-    //    self.meshes.push(mesh_gpu);
-    //    self.materials.push(material_gpu);
-
-    //    RenderObject { mesh: mesh_handle, material: material_handle}
-    //}
-
-    pub fn register_render_object(
-        &mut self,
-        mesh_handle: Handle<MeshGPU>,
-        material_handle: Handle<MaterialGPU>, 
-        render_layer: RenderLayer) -> Handle<RenderObject> 
-    {
-        let render_handle = Handle::<RenderObject> {handle: self.renderables.len() as u32, _phantom: PhantomData};
-        self.renderables.push(RenderObject {transform: glam::Mat4::IDENTITY, mesh: mesh_handle, material: material_handle, layer: render_layer, visible: true});
-        return render_handle;
-    }
-
-    pub fn transform_render_object(&mut self, transform: &Transform, object_id: Handle<RenderObject>) {
-        let object = &mut self.renderables[object_id.handle as usize];
-        object.transform =  glam::Mat4::from_translation(transform.pos.as_vec3())
-                          * glam::Mat4::from_quat(transform.rot.as_quat())
-                          * glam::Mat4::from_scale(transform.scl.as_vec3())
-    }
-
-    pub fn create_mesh(&mut self, mesh: &Mesh) -> Handle<MeshGPU> {
-        let mesh_gpu = self.controller.create_mesh_gpu(mesh);
-        let mesh_handle     = Handle::<MeshGPU> {handle: self.meshes.len() as u32, _phantom: PhantomData};
-
-        self.meshes.push(DrawMesh { mesh: mesh_gpu, ref_count: 1 });
-
-        mesh_handle
-    }
-
-    pub fn create_material(&mut self, albedo: &RgbaImage) -> Handle<MaterialGPU> {
-        let tex_gpu  = self.controller.create_texture_gpu(albedo);
-        let mate_gpu = self.controller.create_material_gpu(&self.texture_bind_group_layout, tex_gpu);
-
-        let mate_handle     = Handle::<MaterialGPU> {handle: self.materials.len() as u32, _phantom: PhantomData};
-
-        self.materials.push(DrawMaterial { material: mate_gpu, ref_count: 1 });
-
-        mate_handle
-    }
-
-    pub fn ref_cnt_mesh_add(&mut self, handle: Handle<MeshGPU>) {
-        self.meshes[handle.handle as usize].ref_count += 1;
-    }
-
-    pub fn ref_cnt_material_add(&mut self, handle: Handle<MaterialGPU>) {
-        self.materials[handle.handle as usize].ref_count += 1;
-    }
-
-    pub fn delete_render_object(&mut self, handle: Handle<RenderObject>) {
-        let mesh_handle     = self.renderables[handle.handle as usize].mesh;
-        let material_handle = self.renderables[handle.handle as usize].material;
-
-        self.delete_mesh(mesh_handle);
-        self.delete_material(material_handle);
-    }
-
-    pub fn delete_mesh(&mut self, handle: Handle<MeshGPU>) {
-        let mesh = &mut self.meshes[handle.handle as usize];
-        mesh.ref_count-=1;
-
-        if mesh.ref_count == 0 {
-            self.meshes.remove(handle.handle as usize);
-        }
-    }
-
-    pub fn delete_material(&mut self, handle: Handle<MaterialGPU>) {
-        let mat = &mut self.materials[handle.handle as usize];
-        mat.ref_count-=1;
-
-        if mat.ref_count == 0 {
-            self.materials.remove(handle.handle as usize);
-        }
-    }
-}
-
-pub struct MeshObject {
-    transform: Rc<RefCell<Transform>>,
-    render_id: Handle<RenderObject>,
-}
-
-impl MeshObject {
-    pub fn new() -> Self {
-        Self {
-            transform: Rc::new(RefCell::new(Transform::new())),
-            render_id: Handle::<RenderObject> { handle: u32::MAX, _phantom: PhantomData }
-        }
-    }
-}
-
-pub trait ObjectRenderer {
-    fn init(&mut self, scene: &Rc<RefCell<RenderScene>>);
-
-    fn make_draw_commands(&self, commands: &mut Vec<DrawCommand>);
-
-    fn make_draw_commands_opaque(&self, commands: &mut Vec<DrawCommand>) {}
-
-    fn make_draw_commands_transparent(&self, commands: &mut Vec<DrawCommand>) {}
-
-    fn make_draw_commands_scissor(&self, commands: &mut Vec<DrawCommandScissor>) {}
-}
-
-pub struct BaseObjectRenderer {
-    render_scene: Option<Rc<RefCell<RenderScene>>>,
-    obj: MeshObject,
-}
-
-impl BaseObjectRenderer {
-    pub fn new() -> Self {
-        Self {
-            render_scene: None,
-            obj: MeshObject::new()
-        }
-    }
-}
-
-impl ObjectRenderer for BaseObjectRenderer {
-    fn init(&mut self, scene: &Rc<RefCell<RenderScene>>) {
-        self.render_scene = Some(scene.clone());
-        
-        let mesh = Mesh {
-            vertices: vec![
-                Vertex { position: [-0.5, -0.5, 0.0], uv: [0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
-                Vertex { position: [ 0.5, -0.5, 0.0], uv: [1.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
-                Vertex { position: [ 0.5,  0.5, 0.0], uv: [1.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
-                Vertex { position: [-0.5,  0.5, 0.0], uv: [0.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
-            ],
-            indices: vec![0, 1, 2, 2, 3, 0],
-        };
-
-        let img = image::open("resources/images/green.png").unwrap().fliph();
-        let rgba = img.to_rgba8();
-    
-        let mut scene_mut = scene.borrow_mut();
-        let mesh_h = scene_mut.create_mesh(&mesh);
-        let mat_h  = scene_mut.create_material(&rgba);
-        self.obj.render_id = scene_mut.register_render_object(mesh_h, mat_h, RenderLayer::Solid);
-    }
-
-    fn make_draw_commands(&self, commands: &mut Vec<DrawCommand>) {
-        if let Some(scene) = &self.render_scene {
-
-            let transform = self.obj.transform.borrow();
-
-            scene.borrow_mut().transform_render_object(&transform, self.obj.render_id);
-            commands.push(DrawCommand { object_id: self.obj.render_id });
-        }
-    }
-}
+// std
+use std::rc::Rc;
+
+// crate
+use crate::model::{Mesh, Vertex, Transform};
+use crate::component_system::RenderComponent;
+use crate::render_service::{RenderingService, RenderState};
+use crate::gpu_resources::ResourceController;
 
 pub trait RenderSystem {
     fn render(&mut self, render_pass: &mut wgpu::RenderPass);
+
+    fn get_render_service_mut(&mut self) -> &mut RenderingService;
+    fn get_render_state(&mut self) -> &mut RenderState;
 }
 
 pub struct BasicRenderSystem {
@@ -403,10 +33,10 @@ pub struct BasicRenderSystem {
 
     texture_bind_group_layout: Rc<wgpu::BindGroupLayout>,
 
-    render_scene: Rc<RefCell<RenderScene>>,
-    draw_commands: Vec<DrawCommand>,
-    draw_commands_scissor: Vec<DrawCommandScissor>,
-    object_renderers: Vec<Box<dyn ObjectRenderer>>
+    rendering_service: RenderingService,
+    render_state: RenderState,
+
+    render_components: Vec<Box<dyn RenderComponent>>
 }
 
 impl BasicRenderSystem {
@@ -553,7 +183,7 @@ impl BasicRenderSystem {
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some("vs_main"),
-                    buffers: &[model::Vertex::desc()],
+                    buffers: &[Vertex::desc()],
                     compilation_options: Default::default(),
                 },
 
@@ -585,16 +215,20 @@ impl BasicRenderSystem {
 
             texture_bind_group_layout: texture_bind_group_layout.clone(),
 
-            render_scene: Rc::new(RefCell::new(RenderScene::new(&res_controller, &texture_bind_group_layout))),
-            draw_commands: Vec::new(),
-            draw_commands_scissor: Vec::new(),
-            object_renderers: Vec::new()
+            rendering_service: RenderingService::new(&res_controller, &texture_bind_group_layout),
+            render_state: RenderState {draw_commands: Vec::new()},
+            render_components: Vec::new()
         }
     }
 
-    pub fn register_object_renderer(&mut self, mut renderer: Box<dyn ObjectRenderer>) {
-        renderer.init(&self.render_scene);
-        self.object_renderers.push(renderer);
+    pub fn add_render_component(&mut self, component: Box<dyn RenderComponent>) {
+        self.render_components.push(component);
+    }
+
+    pub fn init_components(&mut self) {
+        for render_component in self.render_components.iter_mut() {
+            render_component.init_render(&mut self.rendering_service);
+        }
     }
 }
 
@@ -603,18 +237,17 @@ impl RenderSystem for BasicRenderSystem {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
         pass.set_bind_group(1, &self.model_bind_group,  &[]);
-        
-        for renderer in self.object_renderers.iter() {
-            renderer.make_draw_commands(&mut self.draw_commands);
+
+        for component in self.render_components.iter_mut() {
+            component.render(&mut self.rendering_service, &mut self.render_state);
         }
+    
+        for draw in self.render_state.draw_commands.iter() {
+            let obj = &self.rendering_service.renderables[draw.object_id.handle as usize];
+            let mesh = &self.rendering_service.meshes[obj.mesh.handle as usize].mesh;
+            let material = &self.rendering_service.materials[obj.material.handle as usize].material;
 
-        let scene = self.render_scene.borrow();
-        for draw in self.draw_commands.iter() {
-            let obj = &scene.renderables[draw.object_id.handle as usize];
-            let mesh = &scene.meshes[obj.mesh.handle as usize].mesh;
-            let material = &scene.materials[obj.material.handle as usize].material;
-
-            self.res_controller.queue.write_buffer(&self.model_buffer, 0, bytemuck::cast_slice(&obj.transform.to_cols_array()));
+            self.res_controller.queue.write_buffer(&self.model_buffer, 0, bytemuck::cast_slice(&draw.transform_mat.to_cols_array()));
             if let Some(vb) = &mesh.vertex_buffer {
                 pass.set_vertex_buffer(0, vb.slice(..));
             }
@@ -624,7 +257,14 @@ impl RenderSystem for BasicRenderSystem {
             pass.set_bind_group(2, &material.texture_bind_group, &[]);
             pass.draw_indexed(0..mesh.index_count as u32, 0, 0..1);
         }
-        
-        self.draw_commands.clear();
+        self.render_state.draw_commands.clear();
+    }
+
+    fn get_render_service_mut(&mut self) -> &mut RenderingService {
+        &mut self.rendering_service
+    }
+
+    fn get_render_state(&mut self) -> &mut RenderState {
+        &mut self.render_state
     }
 }

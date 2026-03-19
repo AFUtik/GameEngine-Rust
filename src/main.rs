@@ -1,7 +1,13 @@
-use std::{cell::RefCell, sync::Arc};
-use std::rc::Rc;
+mod component_system;
+mod render_system;
+mod renderer;
+mod model;
+mod engine;
+mod render_service;
+mod gpu_resources;
 
-use image::GenericImageView;
+use engine::EngineContext;
+use std::sync::Arc;
 
 use winit::{
     application::ApplicationHandler,
@@ -10,38 +16,16 @@ use winit::{
     window::{Window, WindowAttributes},
 };
 
-use wgpu::{Texture, util::DeviceExt};
-
-mod model;
-
-mod render_system;
-mod renderer;
-
-
-use crate::render_system::BaseObjectRenderer;
-use crate::{render_system::{BasicRenderSystem, RenderObject}, renderer::Renderer};
-
-struct App {
-    window: Option<Arc<Window>>,
-    renderer: Option<Renderer>,
-}
-
-impl ApplicationHandler for App {
+impl ApplicationHandler for EngineContext {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window = Arc::new(event_loop
             .create_window(WindowAttributes::default().with_title("wgpu window"))
             .unwrap());
 
-        self.renderer = Some(pollster::block_on(Renderer::new(window.clone())));
+        self.renderer = Some(pollster::block_on(renderer::Renderer::new(window.clone())));
         self.window   = Some(window);
 
-        if let Some(renderer) = &mut self.renderer {
-            let mut rsystem  = Box::new(BasicRenderSystem::new(&renderer.controller, &renderer.config));
-            let obj_renderer = Box::new(BaseObjectRenderer::new());
-            rsystem.register_object_renderer(obj_renderer);
-
-            renderer.create_render_system(rsystem);
-        }
+        self.init_render_systems();
     }
 
     fn window_event(
@@ -60,9 +44,7 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                if let Some(state) = &mut self.renderer {
-                    state.render();
-                }
+                self.render();
             }
             _ => {}
         }
@@ -78,9 +60,10 @@ impl ApplicationHandler for App {
 fn main() {
     let event_loop = EventLoop::new().unwrap();
 
-    let mut app = App {
+    let mut app = EngineContext {
         window: None,
         renderer: None,
+        render_systems: Vec::new()
     };
 
     event_loop.run_app(&mut app).unwrap();

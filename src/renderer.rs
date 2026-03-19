@@ -1,7 +1,6 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use image::RgbaImage;
 use winit::{
     application::ApplicationHandler,
     event::*,
@@ -9,16 +8,14 @@ use winit::{
     window::{Window, WindowAttributes},
 };
 
-use crate::{model::Mesh, render_system::{ResourceController, MaterialGPU, MeshGPU, RenderSystem, TextureGPU}};
+use crate::render_system::RenderSystem;
+use crate::gpu_resources::ResourceController;
 
 pub struct Renderer {
     pub controller: Rc<ResourceController>,
 
     surface: wgpu::Surface<'static>,
     pub config: wgpu::SurfaceConfiguration,
-
-    // Render system that have different pipeline //
-    systems: Vec<Box<dyn RenderSystem>>
 }
 
 impl Renderer {
@@ -68,16 +65,11 @@ impl Renderer {
         Self {
             controller: Rc::new(ResourceController {device, queue}),
             surface,
-            config,
-            systems: Vec::new()
+            config
         }
     }
 
-    pub fn create_render_system(&mut self, system: Box<dyn RenderSystem>) {
-        self.systems.push(system);
-    }
-
-    pub fn render(&mut self) {
+    pub fn render(&mut self, systems: &mut Vec<Box<dyn RenderSystem>>) {
         let frame = self.surface
             .get_current_texture()
             .unwrap();
@@ -124,9 +116,8 @@ impl Renderer {
                         multiview_mask: None,
                     }
                 );   
-            for system in self.systems.iter_mut() {system.render(&mut pass);}
+            for system in systems.iter_mut() {system.render(&mut pass);}
         }
-
         self.controller.queue.submit(Some(encoder.finish()));
         frame.present();
     }
