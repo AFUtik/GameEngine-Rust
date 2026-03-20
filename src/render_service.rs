@@ -4,6 +4,7 @@ use crate::component_system::RenderComponent;
 
 use image::RgbaImage;
 
+use crate::camera::Camera;
 use crate::model::{Mesh, Vertex, Transform};
 use crate::gpu_resources::{MeshGPU, MaterialGPU, TextureGPU, ResourceController};
 
@@ -74,6 +75,12 @@ pub struct RenderState {
     pub draw_commands: Vec<DrawCommand>
 }
 
+pub struct RenderContext<'a> {
+    pub service: &'a mut RenderingService,
+    pub state: &'a mut RenderState,
+    pub camera: &'a mut Camera
+}
+
 impl RenderingService {
     pub fn new(controller: &Rc<ResourceController>, texture_bind_group_layout: &Rc<wgpu::BindGroupLayout>) -> Self {
         Self {
@@ -102,10 +109,7 @@ impl RenderingService {
         transform: &Transform,
         state: &mut RenderState) 
     {
-        state.draw_commands.push( DrawCommand { transform_mat: (glam::Mat4::from_translation(transform.pos.as_vec3())
-                                                              * glam::Mat4::from_quat(transform.rot.as_quat())
-                                                              * glam::Mat4::from_scale(transform.scl.as_vec3())), object_id } );
-
+        state.draw_commands.push( DrawCommand { transform_mat: *transform.matrix(), object_id } );
     }
 
     pub fn create_mesh(&mut self, mesh: &Mesh) -> Handle<MeshGPU> {
@@ -162,3 +166,5 @@ impl RenderingService {
         }
     }
 }
+
+

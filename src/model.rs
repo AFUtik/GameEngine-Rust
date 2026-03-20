@@ -43,18 +43,30 @@ pub struct Transform {
     pub pos: glam::DVec3,
     pub rot: glam::DQuat,
     pub scl: glam::DVec3,
+    mat: glam::Mat4,
 }
 
 impl Transform {
     pub fn new() -> Self {
         Self {
-            pos:   glam::DVec3::ZERO,
-            rot:   glam::DQuat::IDENTITY,
-            scl:   glam::DVec3::ONE,
+            pos: glam::DVec3::ZERO,
+            rot: glam::DQuat::IDENTITY,
+            scl: glam::DVec3::ONE,
+            mat: glam::Mat4::IDENTITY,
         }
     }
 
     pub fn translate(&mut self, delta: &glam::DVec3) {
         self.pos += *delta;
+        self.mat = self.mat * glam::Mat4::from_translation(delta.as_vec3());
+    }
+
+    pub fn set_position(&mut self, delta: &glam::DVec3) {
+        self.pos += *delta;
+        self.mat = glam::Mat4::from_translation(delta.as_vec3());
+    }
+
+    pub fn matrix(&self) -> &glam::Mat4 {
+        &self.mat
     }
 }

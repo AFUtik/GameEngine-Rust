@@ -5,6 +5,7 @@ mod model;
 mod engine;
 mod render_service;
 mod gpu_resources;
+mod camera;
 
 use engine::EngineContext;
 use std::sync::Arc;
@@ -59,12 +60,7 @@ impl ApplicationHandler for EngineContext {
 
 fn main() {
     let event_loop = EventLoop::new().unwrap();
-
-    let mut app = EngineContext {
-        window: None,
-        renderer: None,
-        render_systems: Vec::new()
-    };
+    let mut app = EngineContext::new();
 
     event_loop.run_app(&mut app).unwrap();
 }

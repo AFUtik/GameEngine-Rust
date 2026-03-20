@@ -7,9 +7,10 @@ use wgpu::{Texture, util::DeviceExt};
 use std::rc::Rc;
 
 // crate
+use crate::camera::Camera;
 use crate::model::{Mesh, Vertex, Transform};
 use crate::component_system::RenderComponent;
-use crate::render_service::{RenderingService, RenderState};
+use crate::render_service::{RenderContext, RenderState, RenderingService};
 use crate::gpu_resources::ResourceController;
 
 pub trait RenderSystem {
@@ -36,11 +37,15 @@ pub struct BasicRenderSystem {
     rendering_service: RenderingService,
     render_state: RenderState,
 
-    render_components: Vec<Box<dyn RenderComponent>>
+    render_components: Vec<Box<dyn RenderComponent>>,
+    pub camera: Camera
 }
 
 impl BasicRenderSystem {
-    pub fn new(res_controller: &Rc<ResourceController>, config: &wgpu::SurfaceConfiguration) -> Self {
+    pub fn new(
+        res_controller: &Rc<ResourceController>, 
+        config: &wgpu::SurfaceConfiguration) -> Self 
+    {
         let shader = res_controller.device.create_shader_module(
             wgpu::ShaderModuleDescriptor {
                 label: Some("shader"),
@@ -89,24 +94,10 @@ impl BasicRenderSystem {
             ],
         }));
 
-        let fovy = 45.0f32.to_radians();
-        let aspect = 1920.0 / 1080.0;    
-        let near = 0.1;                  
-        let far = 100.0;  
-
-        let proj = Mat4::perspective_rh(fovy, aspect, near, far);
-        
-        let eye = Vec3::new(0.0, 2.0, 4.0);
-        let target = Vec3::new(0.0, 0.0, 0.0);
-        let up = Vec3::Y;
-
-        let view = Mat4::look_at_rh(eye, target, up);
-        let projview = proj * view;
-        
         // Camera Uniform //
         let camera_buffer = res_controller.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera Buffer"),
-            contents: bytemuck::cast_slice(&[projview]),
+            contents: bytemuck::cast_slice(&[Mat4::IDENTITY]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         
@@ -217,7 +208,9 @@ impl BasicRenderSystem {
 
             rendering_service: RenderingService::new(&res_controller, &texture_bind_group_layout),
             render_state: RenderState {draw_commands: Vec::new()},
-            render_components: Vec::new()
+            render_components: Vec::new(),
+
+            camera: Camera::new()
         }
     }
 
@@ -227,7 +220,7 @@ impl BasicRenderSystem {
 
     pub fn init_components(&mut self) {
         for render_component in self.render_components.iter_mut() {
-            render_component.init_render(&mut self.rendering_service);
+            render_component.init(&mut self.rendering_service);
         }
     }
 }
@@ -237,9 +230,17 @@ impl RenderSystem for BasicRenderSystem {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
         pass.set_bind_group(1, &self.model_bind_group,  &[]);
+        
+        self.res_controller.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&self.camera.get_projview().to_cols_array()));
+
+        let mut render_ctx = RenderContext {
+            service: &mut self.rendering_service,
+            state:   &mut self.render_state,
+            camera:  &mut self.camera
+        };
 
         for component in self.render_components.iter_mut() {
-            component.render(&mut self.rendering_service, &mut self.render_state);
+            component.render(&mut render_ctx);
         }
     
         for draw in self.render_state.draw_commands.iter() {

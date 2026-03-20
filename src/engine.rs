@@ -7,6 +7,7 @@ use crate::render_service::{self, Handle, RenderObject};
 use crate::render_system::{self, BasicRenderSystem, RenderSystem};
 use crate::renderer::Renderer;
 use crate::model::{self, Mesh, Transform, Vertex};
+use crate::camera::Camera;
 
 pub struct EngineContext {
     pub window: Option<Arc<Window>>,
@@ -14,6 +15,16 @@ pub struct EngineContext {
 
     pub render_systems: Vec<Box<dyn RenderSystem>>,
     //pub render_components: Vec<Box<dyn RenderComponent>>
+}
+
+impl EngineContext {
+    pub fn new() -> Self {
+        Self {
+            window: None,
+            renderer: None,
+            render_systems: Vec::new()
+        }
+    }
 }
 
 struct SimpleRenderComponent {
@@ -31,7 +42,7 @@ impl SimpleRenderComponent {
 }
 
 impl RenderComponent for SimpleRenderComponent {
-    fn init_render(&mut self, render_service: &mut render_service::RenderingService) {
+    fn init(&mut self, render_service: &mut render_service::RenderingService) {
         let mesh = Mesh {
             vertices: vec![
                 Vertex { position: [-0.5, -0.5, 0.0], uv: [0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
@@ -50,8 +61,8 @@ impl RenderComponent for SimpleRenderComponent {
         self.object = render_service.register_render_object(mesh_h, mat_h, render_service::RenderLayer::Solid);
     }
 
-    fn render(&mut self, render_service: &mut render_service::RenderingService, render_state: &mut render_service::RenderState) {
-        render_service.render_object(self.object, &self.transform, render_state);
+    fn render(&mut self, ctx: &mut render_service::RenderContext) {
+        ctx.service.render_object(self.object, &self.transform, ctx.state);
     }
 }
 
@@ -59,7 +70,10 @@ impl EngineContext {
     pub fn init_render_systems(&mut self) {
         if let Some(renderer) = &self.renderer {
             let mut basic_system = Box::new(BasicRenderSystem::new(&renderer.controller, &renderer.config));
-
+            
+            basic_system.camera.translate(&glam::Vec3 { x: 0.0, y: 0.0, z: 2.0 });
+            basic_system.camera.update();
+            
             basic_system.add_render_component(Box::new(SimpleRenderComponent::new()));
             basic_system.init_components();
 
