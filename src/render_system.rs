@@ -1,5 +1,6 @@
 use glam::{Mat4, Vec3, Vec2};
 use image::RgbaImage;
+use std::cell::RefCell;
 use std:: {collections::HashMap, marker::PhantomData};
 use wgpu::{Texture, util::DeviceExt};
 
@@ -10,14 +11,11 @@ use std::rc::Rc;
 use crate::camera::Camera;
 use crate::model::{Mesh, Vertex, Transform};
 use crate::component_system::RenderComponent;
-use crate::render_service::{RenderContext, RenderState, RenderingService};
+use crate::render_service::{RenderContext, RenderState, RenderService, RenderServiceRc};
 use crate::gpu_resources::ResourceController;
 
 pub trait RenderSystem {
-    fn render(&mut self, render_pass: &mut wgpu::RenderPass);
-
-    fn get_render_service_mut(&mut self) -> &mut RenderingService;
-    fn get_render_state(&mut self) -> &mut RenderState;
+    fn render(&mut self, render_pass: &mut wgpu::RenderPass, camera: &Camera);
 }
 
 pub struct BasicRenderSystem {
@@ -34,11 +32,10 @@ pub struct BasicRenderSystem {
 
     texture_bind_group_layout: Rc<wgpu::BindGroupLayout>,
 
-    rendering_service: RenderingService,
+    render_service: RenderServiceRc,
     render_state: RenderState,
 
-    render_components: Vec<Box<dyn RenderComponent>>,
-    pub camera: Camera
+    render_components: Vec<Box<dyn RenderComponent>>
 }
 
 impl BasicRenderSystem {
@@ -206,11 +203,9 @@ impl BasicRenderSystem {
 
             texture_bind_group_layout: texture_bind_group_layout.clone(),
 
-            rendering_service: RenderingService::new(&res_controller, &texture_bind_group_layout),
+            render_service: Rc::new(RefCell::new(RenderService::new(&res_controller, &texture_bind_group_layout))),
             render_state: RenderState {draw_commands: Vec::new()},
-            render_components: Vec::new(),
-
-            camera: Camera::new()
+            render_components: Vec::new()
         }
     }
 
@@ -220,23 +215,23 @@ impl BasicRenderSystem {
 
     pub fn init_components(&mut self) {
         for render_component in self.render_components.iter_mut() {
-            render_component.init(&mut self.rendering_service);
+            render_component.init(&self.render_service);
         }
     }
 }
 
 impl RenderSystem for BasicRenderSystem {
-    fn render(&mut self, pass: &mut wgpu::RenderPass) {
+    fn render(&mut self, pass: &mut wgpu::RenderPass, camera: &Camera) {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
         pass.set_bind_group(1, &self.model_bind_group,  &[]);
         
-        self.res_controller.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&self.camera.get_projview().to_cols_array()));
+        self.res_controller.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&camera.get_projview().to_cols_array()));
 
+        let rs = &self.render_service.borrow_mut();
         let mut render_ctx = RenderContext {
-            service: &mut self.rendering_service,
+            service: rs,
             state:   &mut self.render_state,
-            camera:  &mut self.camera
         };
 
         for component in self.render_components.iter_mut() {
@@ -244,9 +239,13 @@ impl RenderSystem for BasicRenderSystem {
         }
     
         for draw in self.render_state.draw_commands.iter() {
-            let obj = &self.rendering_service.renderables[draw.object_id.handle as usize];
-            let mesh = &self.rendering_service.meshes[obj.mesh.handle as usize].mesh;
-            let material = &self.rendering_service.materials[obj.material.handle as usize].material;
+            let obj = &rs.renderables[draw.object_id.handle as usize];
+            if let Some(render_bounds) = &obj.render_bounds {
+
+            }
+
+            let mesh = &rs.meshes[obj.mesh.handle as usize].mesh;
+            let material = &rs.materials[obj.material.handle as usize].material;
 
             self.res_controller.queue.write_buffer(&self.model_buffer, 0, bytemuck::cast_slice(&draw.transform_mat.to_cols_array()));
             if let Some(vb) = &mesh.vertex_buffer {
@@ -259,13 +258,5 @@ impl RenderSystem for BasicRenderSystem {
             pass.draw_indexed(0..mesh.index_count as u32, 0, 0..1);
         }
         self.render_state.draw_commands.clear();
-    }
-
-    fn get_render_service_mut(&mut self) -> &mut RenderingService {
-        &mut self.rendering_service
-    }
-
-    fn get_render_state(&mut self) -> &mut RenderState {
-        &mut self.render_state
     }
 }

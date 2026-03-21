@@ -10,6 +10,7 @@ use winit::{
 
 use crate::render_system::RenderSystem;
 use crate::gpu_resources::ResourceController;
+use crate::camera::Camera;
 
 pub struct Renderer {
     pub controller: Rc<ResourceController>,
@@ -69,7 +70,7 @@ impl Renderer {
         }
     }
 
-    pub fn render(&mut self, systems: &mut Vec<Box<dyn RenderSystem>>) {
+    pub fn render(&mut self, systems: &mut Vec<Box<dyn RenderSystem>>, camera: &Camera) {
         let frame = self.surface
             .get_current_texture()
             .unwrap();
@@ -116,7 +117,7 @@ impl Renderer {
                         multiview_mask: None,
                     }
                 );   
-            for system in systems.iter_mut() {system.render(&mut pass);}
+            for system in systems.iter_mut() {system.render(&mut pass, camera);}
         }
         self.controller.queue.submit(Some(encoder.finish()));
         frame.present();

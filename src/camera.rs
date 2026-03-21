@@ -6,6 +6,8 @@ pub struct Camera {
     aspect: f32,
     far: f32,
     near: f32,
+    pub pitch: f32,
+    pub yaw: f32,
 
     x_dir: glam::Vec3,
 	y_dir: glam::Vec3,
@@ -20,9 +22,11 @@ impl Camera {
         Self {
             position: glam::Vec3::ZERO,
             fov: 45.0f32.to_radians(),
-            aspect: 1920.0/1080.0,
+            aspect: 16.0/9.0,
             far: 0.1,
             near: 100.0,
+            pitch: 0.0,
+            yaw: 0.0,
 
             x_dir: glam::Vec3::ONE,
             y_dir: glam::Vec3::ONE,
@@ -70,6 +74,27 @@ impl Camera {
             glam::Quat::from_axis_angle(glam::Vec3::Y, y) *
             glam::Quat::from_axis_angle(glam::Vec3::X, x);
         self.update_vectors();
+    }
+
+    pub fn rotate_yaw_pitch(&mut self, delta_yaw: f32, delta_pitch: f32) {
+        self.yaw += delta_yaw;
+        self.pitch = (self.pitch + delta_pitch).clamp(-1.54, 1.54);
+
+        self.rotation =
+            glam::Quat::from_axis_angle(glam::Vec3::Y, self.yaw) *
+            glam::Quat::from_axis_angle(glam::Vec3::X, self.pitch);
+    }
+
+    pub fn forward(&self) -> glam::Vec3 {
+        self.rotation * -glam::Vec3::Z
+    }
+
+    pub fn right(&self) -> glam::Vec3 {
+        self.rotation * glam::Vec3::X
+    }
+
+    pub fn up(&self) -> glam::Vec3 {
+        self.rotation * glam::Vec3::Y
     }
 
     pub fn get_projview(&self) -> &glam::Mat4 { 

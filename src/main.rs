@@ -14,7 +14,7 @@ use winit::{
     application::ApplicationHandler,
     event::*,
     event_loop::{ActiveEventLoop, EventLoop},
-    window::{Window, WindowAttributes},
+    window::{CursorGrabMode, Window, WindowAttributes},
 };
 
 impl ApplicationHandler for EngineContext {
@@ -36,6 +36,24 @@ impl ApplicationHandler for EngineContext {
         event: WindowEvent,
     ) {
         match event {
+            WindowEvent::KeyboardInput { event, .. } => {
+                use winit::keyboard::{KeyCode, PhysicalKey};
+
+                let pressed = event.state == ElementState::Pressed;
+
+                match event.physical_key {
+                    PhysicalKey::Code(KeyCode::KeyW) => self.w_pressed = pressed,
+                    PhysicalKey::Code(KeyCode::KeyA) => self.a_pressed = pressed,
+                    PhysicalKey::Code(KeyCode::KeyS) => self.s_pressed = pressed,
+                    PhysicalKey::Code(KeyCode::KeyD) => self.d_pressed = pressed,
+                    PhysicalKey::Code(KeyCode::ShiftLeft) => self.shift_pressed = pressed,
+                    PhysicalKey::Code(KeyCode::Space) => self.space_pressed = pressed,
+                    PhysicalKey::Code(KeyCode::Tab) =>      self.lock_cursor(),
+                    PhysicalKey::Code(KeyCode::CapsLock) => self.unlock_cursor(),
+                    _ => {}
+                }
+            }
+
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
@@ -46,6 +64,20 @@ impl ApplicationHandler for EngineContext {
             }
             WindowEvent::RedrawRequested => {
                 self.render();
+            }
+            _ => {}
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: DeviceEvent,
+    ) {
+        match event {
+            DeviceEvent::MouseMotion { delta } => {
+                self.mouse_delta = glam::Vec2::new(delta.0 as f32, delta.1 as f32);
             }
             _ => {}
         }

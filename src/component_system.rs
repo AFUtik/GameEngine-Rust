@@ -1,7 +1,8 @@
-use crate::render_service::{RenderContext, RenderingService};
+use crate::render_service::{self, RenderContext, RenderServiceRc, HandlesContainer};
 use crate::engine::EngineContext;
 
 pub trait RenderComponent {
-    fn init(&mut self, render_service: &mut RenderingService) {}
-    fn render(&mut self, render_service: &mut RenderContext) {}
+    fn init(&mut self, render_service: &RenderServiceRc) {}
+
+    fn render(&mut self, context: &mut RenderContext) {}
 }
